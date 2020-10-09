@@ -1,0 +1,19 @@
+{
+  "name": "crypto-courses",
+  "version": "1.0.0",
+  "description": "Exercices for cryptobook by nakov",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "crypto"
+  ],
+  "author": "ed@getlarge.eu",
+  "license": "ISC",
+  "dependencies": {
+    "argon2": "^0.27.0",
+    "node-forge": "^0.10.0",
+    "scrypt-kdf": "^2.0.1"
+  }
+}
