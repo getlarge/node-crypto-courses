@@ -1,5 +1,6 @@
 const assert = require('assert');
 const crypto = require('crypto');
+const ecies = require('standard-ecies');
 
 // 7 - ASYMMETRIC ENCRYPTION - DECRYPTION
 
@@ -106,14 +107,11 @@ async function ecc_crypt_brainpoolP256r1(
 async function ecc_crypt_brainpoolP256r1_aes_gcm(
   plainText = `Text to be encrypted by ECC public key 
 and decrypted by its corresponding ECC private key`,
-  alicePrivateKey = '12d323b77a03f9d57e6812de1fb0d508befd86eeee87fc44771dea3ab58dc0fa',
+  privateKey = '12d323b77a03f9d57e6812de1fb0d508befd86eeee87fc44771dea3ab58dc0fa',
   authTagLength = 16
 ) {
   const curveName = 'brainpoolP256r1';
   const cipherAlgorithm = 'aes-256-gcm';
-
-  const alice = crypto.createECDH(curveName);
-  alice.setPrivateKey(alicePrivateKey, 'hex');
 
   function encryptAES_GCM(msg, secretKey) {
     return new Promise((resolve, reject) => {
@@ -193,9 +191,12 @@ and decrypted by its corresponding ECC private key`,
     return decryptAES_GCM(cipherText, iv, authTag, secretKey);
   }
 
+  const ecdh = crypto.createECDH(curveName);
+  ecdh.setPrivateKey(privateKey, 'hex');
+
   const { cipherText, iv, authTag, cipherTextPubKey } = await encryptECC(
     plainText,
-    alice.getPublicKey()
+    ecdh.getPublicKey()
   );
 
   const encryptedMsgObj = {
@@ -214,7 +215,7 @@ and decrypted by its corresponding ECC private key`,
 
   const decryptedText = await decryptECC(
     { cipherText, iv, authTag, cipherTextPubKey },
-    alice.getPrivateKey()
+    ecdh.getPrivateKey()
   );
 
   assert.strictEqual(plainText, decryptedText);
@@ -222,9 +223,283 @@ and decrypted by its corresponding ECC private key`,
   return { encryptedText: cipherText, decryptedText };
 }
 
+// ECIES Encryption
+async function native_ecies_crypto(
+  plainText = 'secret message',
+  privateKey = null,
+  options = {
+    hashName: 'sha256',
+    hashLength: 32,
+    macName: 'sha256',
+    macLength: 32,
+    authTagLength: 16,
+    // curveName: 'brainpoolP256r1',
+    // cipherAlgorithm: 'aes-256-gcm',
+    curveName: 'secp256k1',
+    // cipherAlgorithm: 'aes-128-cbc',
+    cipherAlgorithm: 'chacha20-poly1305',
+    iv: null,
+    keyFormat: 'uncompressed',
+    encoding: {
+      inputKey: 'hex',
+      input: 'utf8',
+      output: 'utf8',
+    },
+    s1: Buffer.allocUnsafe(0),
+    s2: Buffer.allocUnsafe(0),
+  }
+) {
+  function getDerivedKeys(sharedSecret, { hashName, s1 }) {
+    const hash = crypto
+      .createHash(hashName)
+      .update(
+        Buffer.concat([sharedSecret, s1], sharedSecret.length + s1.length)
+      )
+      .digest();
+
+    const encryptionKey = hash.slice(0, hash.length / 2);
+    const macKey = hash.slice(hash.length / 2);
+    return { encryptionKey, macKey };
+  }
+
+  function getAuthTag(cipherText, macKey, { macName, s2 }) {
+    return crypto
+      .createHmac(macName, macKey)
+      .update(Buffer.concat([cipherText, s2], cipherText.length + s2.length))
+      .digest();
+  }
+
+  function symmetricEncrypt(
+    input,
+    key,
+    { cipherAlgorithm, iv, authTagLength }
+  ) {
+    return new Promise((resolve) => {
+      const cipher = crypto.createCipheriv(cipherAlgorithm, key, iv, {
+        authTagLength,
+      });
+
+      const cipherText = cipher.update(input);
+      cipher.final();
+      const authTag = cipher.getAuthTag();
+      resolve({ cipherText, iv, authTag });
+    });
+  }
+
+  async function encrypt(publicKey, message, options) {
+    const ecdh = crypto.createECDH(options.curveName);
+    const R = ecdh.generateKeys(null, options.keyFormat);
+    const sharedSecret = ecdh.computeSecret(publicKey);
+
+    const { encryptionKey, macKey } = getDerivedKeys(sharedSecret, options);
+    const { cipherText, iv, authTag } = await symmetricEncrypt(
+      message,
+      encryptionKey,
+      options
+    );
+    console.log({ authTag });
+    const tag = getAuthTag(cipherText, macKey, options);
+    return Buffer.concat([R, cipherText, tag]);
+  }
+
+  function symmetricDecrypt(
+    cipherBuffer,
+    key,
+    { cipherAlgorithm, iv, authTagLength, encoding },
+    authTag
+  ) {
+    return new Promise((resolve, reject) => {
+      let decipherData =
+        typeof encoding.output === 'string' ? '' : Buffer.allocUnsafe(0);
+      iv = iv || Buffer.allocUnsafe(0);
+
+      const decipher = crypto.createDecipheriv(cipherAlgorithm, key, iv, {
+        authTagLength,
+      });
+      // .setAAD(s1);
+
+      if (authTag) {
+        decipher.setAuthTag(authTag);
+      }
+
+      decipherData =
+        typeof encoding.output === 'string'
+          ? decipher.update(cipherBuffer, null, encoding.output)
+          : decipher.update(cipherBuffer);
+
+      try {
+        decipher.setAuthTag(authTag);
+        if (typeof encoding.output === 'string') {
+          decipherData += decipher.final(null, encoding.output);
+        } else {
+          const lastChunk = decipher.final();
+          decipherData = Buffer.concat(
+            [decipherData, lastChunk],
+            decipherData.length + lastChunk.length
+          );
+        }
+        resolve(decipherData);
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
+  async function decrypt(ecdh, message, options) {
+    const publicKeyLength = ecdh.getPublicKey(null, options.keyFormat).length;
+    const R = message.slice(0, publicKeyLength);
+    const cipherText = message.slice(
+      publicKeyLength,
+      message.length - options.macLength
+    );
+
+    const messageTag = message.slice(message.length - options.macLength);
+    const sharedSecret = ecdh.computeSecret(R);
+    const { encryptionKey, macKey } = getDerivedKeys(sharedSecret, options);
+    const tag = getAuthTag(cipherText, macKey, options);
+
+    if (!crypto.timingSafeEqual(messageTag, tag)) {
+      throw new Error('Bad MAC');
+    }
+
+    return symmetricDecrypt(cipherText, encryptionKey, options);
+  }
+
+  function getIV(cipherAlgorithm, iv) {
+    // TODO check cipherAlgorithm to set the right size
+    if (iv !== null && iv !== undefined) {
+      return iv;
+    }
+    if (cipherAlgorithm.includes('ecb')) {
+      return crypto.randomBytes(0);
+    }
+    if (cipherAlgorithm.includes('chacha20')) {
+      return crypto.randomBytes(12);
+    }
+    return crypto.randomBytes(16);
+  }
+
+  function generateKeys(privateKey, { curveName, encoding }) {
+    const ecdh = crypto.createECDH(curveName);
+    if (privateKey && privateKey instanceof Buffer) {
+      ecdh.setPrivateKey(options.privateKey);
+    } else if (
+      privateKey &&
+      typeof privateKey === 'string' &&
+      typeof encoding.inputKey === 'string'
+    ) {
+      ecdh.setPrivateKey(options.privateKey, encoding.inputKey);
+    } else {
+      ecdh.generateKeys();
+    }
+    return ecdh;
+  }
+
+  function getPlainTextBuffer(text, encoding) {
+    if (typeof text === 'string' && typeof encoding.input === 'string') {
+      return Buffer.from(text, encoding.input);
+    }
+    return text;
+  }
+
+  const ecdh = generateKeys(privateKey, options);
+  plainText = getPlainTextBuffer(plainText, options.encoding);
+  options.iv = getIV(options.cipherAlgorithm, options.iv);
+
+  const encryptedText = await encrypt(ecdh.getPublicKey(), plainText, options);
+  const decryptedText = await decrypt(ecdh, encryptedText, options);
+
+  assert(plainText.toString('hex') === decryptedText.toString('hex'));
+
+  return {
+    encryptedText: encryptedText.toString('hex'),
+    decryptedText: decryptedText.toString('utf8'),
+  };
+}
+
+// USING standard-ecies lib
+function ecies_crypto(
+  plainText = 'hello world',
+  privateKey = null,
+  options = {
+    hashName: 'sha256',
+    hashLength: 32,
+    macName: 'sha256',
+    macLength: 32,
+    // curveName: 'secp256k1',
+    symmetricCypherName: 'aes-128-ecb',
+    curveName: 'brainpoolP256r1',
+    // symmetricCypherName: 'chacha20-poly1305',
+    iv: null,
+    keyFormat: 'uncompressed',
+    encoding: {
+      inputKey: 'hex',
+      input: 'utf8',
+      output: 'utf8',
+    },
+    s1: null, // optional shared information1
+    s2: null, // optional shared information2
+  }
+) {
+  ecies.getIV = (cipherAlgorithm, iv) => {
+    // TODO check cipherAlgorithm to set the right size
+    if (iv !== null && iv !== undefined) {
+      return iv;
+    }
+    if (cipherAlgorithm.includes('ecb')) {
+      return crypto.randomBytes(0);
+    }
+    if (cipherAlgorithm.includes('chacha20')) {
+      return crypto.randomBytes(12);
+    }
+    return crypto.randomBytes(16);
+  };
+
+  ecies.generateKeys = (privateKey, { curveName, encoding }) => {
+    const ecdh = crypto.createECDH(curveName);
+    if (privateKey && privateKey instanceof Buffer) {
+      ecdh.setPrivateKey(options.privateKey);
+    } else if (
+      privateKey &&
+      typeof privateKey === 'string' &&
+      typeof encoding.inputKey === 'string'
+    ) {
+      ecdh.setPrivateKey(options.privateKey, encoding.inputKey);
+    } else {
+      ecdh.generateKeys();
+    }
+    return ecdh;
+  };
+
+  ecies.getPlainTextBuffer = (text, encoding) => {
+    if (typeof text === 'string' && typeof encoding.input === 'string') {
+      return Buffer.from(text, encoding.input);
+    }
+    return text;
+  };
+
+  const ecdh = ecies.generateKeys(privateKey, options);
+  plainText = ecies.getPlainTextBuffer(plainText, options.encoding);
+  options.iv = ecies.getIV(options.symmetricCypherName, options.iv);
+
+  const encryptedText = ecies.encrypt(ecdh.getPublicKey(), plainText, options);
+  const decryptedText = ecies.decrypt(ecdh, encryptedText, options);
+
+  assert(plainText.toString('hex') === decryptedText.toString('hex'));
+
+  return {
+    encryptedText: encryptedText.toString('hex'),
+    decryptedText: options.encoding.output
+      ? decryptedText.toString(options.encoding.output)
+      : decryptedText,
+  };
+}
+
 module.exports = {
   ed25519_keys,
   ecdh_brainpoolP256r1,
   ecc_crypt_brainpoolP256r1,
   ecc_crypt_brainpoolP256r1_aes_gcm,
+  native_ecies_crypto,
+  ecies_crypto,
 };

@@ -13,7 +13,10 @@
   "license": "ISC",
   "dependencies": {
     "argon2": "^0.27.0",
+    "cloneable-readable": "^2.0.1",
+    "multipipe": "^4.0.0",
     "node-forge": "^0.10.0",
-    "scrypt-kdf": "^2.0.1"
+    "scrypt-kdf": "^2.0.1",
+    "standard-ecies": "^2.0.0"
   }
 }
