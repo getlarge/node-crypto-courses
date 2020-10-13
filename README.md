@@ -14,6 +14,7 @@ The solutions are mainly built using Crypto API, but also relies on third party 
 - 6 SYMMETRIC CRYPTO
 - 7 ASYMMETRIC CRYPTO - RSA
 - 8 ASYMMETRIC CRYPTO - EC
+- 9 DIGITAL SIGNATURES
 
 
 ## EXEC

@@ -10,9 +10,12 @@ function measureExecutionTime(hrstart, fn = '') {
   );
 }
 
-function getInputBuffer(input, encoding) {
-  if (typeof input === 'string' && typeof encoding.input === 'string') {
-    return Buffer.from(input, encoding.input);
+function getInputBuffer(input, encoding = { input: null }) {
+  if (typeof input === 'string') {
+    if (typeof encoding.input === 'string') {
+      return Buffer.from(input, encoding.input);
+    }
+    return Buffer.from(input, 'utf8');
   }
   return input;
 }

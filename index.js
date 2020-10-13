@@ -35,8 +35,17 @@ const {
   ecies_crypto,
   native_ecies_crypto,
 } = require('./08-asymmetric-crypto-ecc');
+const {
+  rsa_signature,
+  ec_signature,
+  ed25519_signature,
+  ed448_signature
+} = require('./09-digital-signatures');
 
 function hash() {
+  const hashes = crypto.getHashes();
+  console.log('available hashes', hashes);
+
   const shaHash = simpleHash();
   console.log("SHA('hello') =", shaHash.toString('hex'));
 }
@@ -172,6 +181,50 @@ async function asymmetricCryptoEc() {
   console.log(`native_ecies_crypto(${plainText})`, result);
 }
 
+async function digitalSignatures() {
+  const plainText = 'secretMsg';
+
+  let result = rsa_signature(plainText, {
+    modulusLength: 3072,
+    alg: 'sha3-512',
+  });
+  console.log(
+    'sha3_512_rsa_signature is valid ?',
+    result.signature,
+    result.signatureIsValid
+  );
+
+  result = ec_signature(plainText, { namedCurve: 'secp256k1', alg: 'sha256' });
+  console.log(
+    'sha256_secp256k1_signature is valid ?',
+    result.signature,
+    result.signatureIsValid
+  );
+
+  result = ec_signature(plainText, { namedCurve: 'secp521r1', alg: 'sha512' });
+  console.log(
+    'sha512_secp521r1_signature is valid ?',
+    result.signature,
+    result.signatureIsValid
+  );
+
+  result = ed25519_signature(plainText);
+  console.log(
+    'ed25519_signature is valid ?',
+    result.signature,
+    result.signatureIsValid
+  );
+
+  result = ed448_signature(plainText);
+  console.log(
+    'ed448_signature is valid ?',
+    result.signature,
+    result.signatureIsValid
+  );
+
+  
+}
+
 const COURSES = [
   'HASH',
   'HMAC',
@@ -181,6 +234,7 @@ const COURSES = [
   'SYMMETRIC CRYPTO',
   'ASYMMETRIC CRYPTO - RSA',
   'ASYMMETRIC CRYPTO - EC',
+  'DIGITAL SIGNATURES',
 ];
 
 function checkChapter(chapterOption) {
@@ -228,6 +282,9 @@ function checkChapter(chapterOption) {
         break;
       case 8:
         await asymmetricCryptoEc();
+        break;
+      case 9:
+        await digitalSignatures();
         break;
     }
   } catch (error) {
